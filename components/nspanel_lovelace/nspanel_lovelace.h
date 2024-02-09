@@ -2,7 +2,6 @@
 
 #include <utility>
 
-#include "esphome/components/mqtt/mqtt_client.h"
 #include "esphome/components/uart/uart.h"
 #include "esphome/core/automation.h"
 #include "esphome/core/component.h"
@@ -11,6 +10,14 @@
 #ifdef USE_ARDUINO
 #include "esphome/components/uart/uart_component_esp32_arduino.h"
 #include <HTTPClient.h>
+
+#ifdef USE_MQTT
+#include "esphome/components/mqtt/mqtt_client.h"
+#endif
+
+#ifdef USE_API
+#include "esphome/components/api/custom_api_device.h"
+#endif
 #endif
 #ifdef USE_ESP_IDF
 #include "esphome/components/uart/uart_component_esp_idf.h"
@@ -24,17 +31,24 @@
 namespace esphome {
 namespace nspanel_lovelace {
 
-class NSPanelLovelace : public Component, public uart::UARTDevice {
+class NSPanelLovelace : public Component, public uart::UARTDevice, 
+  #ifdef USE_API
+    public esphome::api::CustomAPIDevice
+  #endif 
+{
  public:
   void setup() override;
   void loop() override;
 
+  #ifdef USE_MQTT
   void set_mqtt(mqtt::MQTTClientComponent *parent) { mqtt_ = parent; }
   void set_recv_topic(const std::string &topic) { recv_topic_ = topic; }
   void set_send_topic(const std::string &topic) { send_topic_ = topic; }
+  #endif
   void set_berry_driver_version(unsigned int value) { berry_driver_version_ = value; }
   void set_missed_updates_workaround(bool value) { use_missed_updates_workaround_ = value; }
   void set_update_baud_rate(unsigned int value) { update_baud_rate_ = value; }
+  void set_use_api(bool value) { use_api_ = value; }
 
   float get_setup_priority() const override { return setup_priority::DATA; }
 
@@ -42,9 +56,12 @@ class NSPanelLovelace : public Component, public uart::UARTDevice {
 
   void send_custom_command(const std::string &command);
 
-  void add_incoming_msg_callback(std::function<void(std::string)> callback);
+  void add_message_from_nextion_callback(std::function<void(std::string)> callback) { this->message_from_nextion_callback_.add(std::move(callback)); }
+  void add_message_to_nextion_callback(std::function<void(std::string&)> callback) { this->message_to_nextion_callback_.add(std::move(callback)); }
 
   void send_nextion_command(const std::string &command);
+
+  void process_command_from_nextion(const std::string &message);
 
   /**
    * Softreset the Nextion
@@ -60,6 +77,10 @@ class NSPanelLovelace : public Component, public uart::UARTDevice {
    */
   void upload_tft(const std::string &url);
 
+  void app_custom_send(const std::string &payload);
+  int app_get_driver_version();
+  void app_flash_nextion(const std::string &payload);
+
  protected:
   void set_baud_rate_(int baud_rate);
 
@@ -68,16 +89,19 @@ class NSPanelLovelace : public Component, public uart::UARTDevice {
   uint16_t recv_ret_string_(std::string &response, uint32_t timeout, bool recv_flag);
 
   bool process_data_();
-  void process_command_(const std::string &message);
 
+  #ifdef USE_MQTT
   mqtt::MQTTClientComponent *mqtt_;
   std::string recv_topic_;
   std::string send_topic_;
+  #endif
   unsigned int berry_driver_version_;
   bool use_missed_updates_workaround_ = true;
   unsigned int update_baud_rate_;
+  bool use_api_ = false;
 
-  CallbackManager<void(std::string)> incoming_msg_callback_;
+  CallbackManager<void(std::string)> message_from_nextion_callback_;
+  CallbackManager<void(std::string&)> message_to_nextion_callback_;
 
   std::vector<uint8_t> buffer_;
 
@@ -101,6 +125,7 @@ class NSPanelLovelace : public Component, public uart::UARTDevice {
 #ifdef USE_ARDUINO
   void init_upload(HTTPClient *http, const std::string &url);
 
+  int last_upload_percentage_ = 0;
   int upload_by_chunks_(HTTPClient *http, const std::string &url, int range_start);
 #elif defined(USE_ESP_IDF)
   void init_upload(const std::string &url);
